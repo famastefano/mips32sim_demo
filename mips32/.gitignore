@@ -1,0 +1,15 @@
+# IDE
+.vscode
+.vs
+MIPS32.*
+
+# Executables/Object files
+build
+*.block
+[Dd]ebug
+[Rr]elease
+Tests
+
+# General
+*.ini
+*.ps1
