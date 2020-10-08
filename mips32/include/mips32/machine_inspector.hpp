@@ -21,7 +21,7 @@ class CPU;
  * It was created to ease the debugging purposes that a simulator creates,
  * like inspecting the RAM, CPU registers and so on.
  **/
-class MachineInspector
+class __declspec(dllexport) MachineInspector
 {
 public:
   MachineInspector& inspect( RAM &ram ) noexcept;

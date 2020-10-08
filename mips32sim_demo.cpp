@@ -1,4 +1,6 @@
-﻿#include <mips32/machine.hpp>
+﻿#include "mips32/test/helpers/test_cpu_instructions.hpp"
+
+#include <mips32/machine.hpp>
 #include <mips32/literals.hpp>
 
 #include <fmt/format.h>
@@ -39,11 +41,18 @@ struct CSTDIOFileHandler final : virtual public mips32::FileHandler
 
 struct MachineDataPlotter
 {
-    MachineDataPlotter() noexcept;
+    mips32::MachineInspector& inspector;
+    std::array<std::uint32_t, 32> prev_gprs = {};
+    std::uint32_t prev_pc, prev_exitcode;
+
+    MachineDataPlotter(mips32::MachineInspector& inspector) noexcept;
     ~MachineDataPlotter();
 
-    void plot(mips32::MachineInspector& inspector) noexcept;
+    void plot() noexcept;
 };
+
+void run_io_program() noexcept;
+void run_debug_sim() noexcept;
 
 int main()
 {
@@ -53,10 +62,23 @@ int main()
     auto filehandler = std::make_unique<CSTDIOFileHandler>();
 
     mips32::Machine machine{ 512_MB, iodevice.get(), filehandler.get() };
-    auto inspector = machine.get_inspector();
+    machine.reset();
 
-    MachineDataPlotter plotter{};
-    plotter.plot(inspector);
+    auto inspector = machine.get_inspector();
+    MachineDataPlotter plotter{inspector};
+
+    fmt::print("{:^50}", "MIPS32 Simulator - Demo\n");
+    fmt::print("1) Program with I/O\n"
+               "2) Debugging simulation\n"
+               "Choice: ");
+
+    char choice{};
+    (void)scanf("%c", &choice);
+    switch (choice)
+    {
+    case '1': run_io_program(); break;
+    case '2': run_debug_sim(); break;
+    }
 }
 
 #pragma region File Handler Implementation
@@ -167,18 +189,100 @@ void ConsoleIODevice::read_string(char* string, std::uint32_t max_count) noexcep
 #pragma endregion
 
 #pragma region Machine Data Plotter Implementation
-MachineDataPlotter::MachineDataPlotter() noexcept
+MachineDataPlotter::MachineDataPlotter(mips32::MachineInspector& inspector) noexcept : inspector(inspector)
 {
+    prev_pc = inspector.CPU_pc();
+    prev_exitcode = inspector.CPU_read_exit_code();
 
+    auto rb = inspector.CPU_gpr_begin();
+    auto re = inspector.CPU_gpr_end();
+    int i = 0;
+    while (rb != re)
+        prev_gprs[i++] = *rb++;
 }
 
 MachineDataPlotter::~MachineDataPlotter()
+{}
+
+/*
+  PC: 0x1234'5678 | Exit Code: string
+  rN hex int | rM hex int
+            ...
+*/
+void MachineDataPlotter::plot() noexcept
+{
+    static char const* exit_code[] =
+    {
+        "NONE",
+        "MANUAL_STOP",
+        "INTERRUPT",
+        "EXCEPTION",
+        "EXIT",
+    };
+
+    static char const* regs[] = {
+        "r0", "r1", "r2", "r3", "r4",
+        "r5", "r6", "r7", "r8", "r9",
+        "r10", "r11", "r12", "r13", "r14",
+        "r15", "r16", "r17", "r18", "r19",
+        "r20", "r21", "r22", "r23", "r24",
+        "r25", "r26", "r27", "r28", "r29",
+        "r30", "r31"
+    };
+
+    // PC + Exit Code
+    {
+        auto cur_pc = inspector.CPU_pc();
+        auto cur_ec = inspector.CPU_read_exit_code();
+        
+        fmt::print(" PC{} {:>#10X}{:14}| ", cur_pc != prev_pc ? '<' : ' ', cur_pc, "");
+        fmt::print("Exit Code {:>18}\n", exit_code[1]);
+    }
+    
+    // Prints registers
+    {
+        int i = 0;
+        auto reg = inspector.CPU_gpr_begin();
+
+        while (i < 16)
+        {
+            auto cur_l = *reg;
+            auto cur_r = *(reg + 16);
+
+            bool cur_l_changed = cur_l != prev_gprs[i];
+            bool cur_r_changed = cur_r != prev_gprs[i+16];
+
+            fmt::print("{:>3}{:1} {:>#10X} {:>12}", regs[i], cur_l_changed ? '<' : ' ', cur_l, (std::int32_t)cur_l);
+            fmt::print(" | {:>3}{:1} {:>#10X} {:>12}\n", regs[i + 16], cur_r_changed ? '<' : ' ', cur_r, (std::int32_t)cur_r);
+
+            ++i;
+            ++reg;
+        }
+    }
+
+    {
+        prev_pc = inspector.CPU_pc();
+        prev_exitcode = inspector.CPU_read_exit_code();
+
+        auto rb = inspector.CPU_gpr_begin();
+        auto re = inspector.CPU_gpr_end();
+        int i = 0;
+        while (rb != re)
+            prev_gprs[i] = *rb++;
+    }
+}
+#pragma endregion
+
+#pragma region Run I/O Program
+void run_io_program() noexcept
 {
 
 }
+#pragma endregion
 
-void MachineDataPlotter::plot(mips32::MachineInspector& inspector) noexcept
+#pragma region Run Debugging Simulation
+void run_debug_sim() noexcept
 {
-    fmt::print("Testing fmt {}", "hello!");
+
 }
 #pragma endregion
