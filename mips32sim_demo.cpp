@@ -51,8 +51,8 @@ struct MachineDataPlotter
     void plot() noexcept;
 };
 
-void run_io_program() noexcept;
-void run_debug_sim() noexcept;
+void run_io_program(MachineDataPlotter& plotter) noexcept;
+void run_debug_sim(MachineDataPlotter& plotter) noexcept;
 
 int main()
 {
@@ -67,7 +67,7 @@ int main()
     auto inspector = machine.get_inspector();
     MachineDataPlotter plotter{inspector};
 
-    fmt::print("{:^50}", "MIPS32 Simulator - Demo\n");
+    fmt::print("{:^50}\n", "MIPS32 Simulator - Demo");
     fmt::print("1) Program with I/O\n"
                "2) Debugging simulation\n"
                "Choice: ");
@@ -76,8 +76,8 @@ int main()
     (void)scanf("%c", &choice);
     switch (choice)
     {
-    case '1': run_io_program(); break;
-    case '2': run_debug_sim(); break;
+    case '1': run_io_program(plotter); break;
+    case '2': run_debug_sim(plotter); break;
     }
 }
 
@@ -268,20 +268,26 @@ void MachineDataPlotter::plot() noexcept
         auto re = inspector.CPU_gpr_end();
         int i = 0;
         while (rb != re)
-            prev_gprs[i] = *rb++;
+            prev_gprs[i++] = *rb++;
     }
 }
 #pragma endregion
 
 #pragma region Run I/O Program
-void run_io_program() noexcept
+void run_io_program(MachineDataPlotter& plotter) noexcept
 {
+    fmt::print("\n\n{:^50}\n", "Program Info");
+    fmt::print("<<info placeholder>>\n");
+    fmt::print("\n{:^50}\n", "CPU's State Before Execution");
+    plotter.plot();
 
+    fmt::print("\n{:^50}\n", "CPU's State After Execution");
+    plotter.plot();
 }
 #pragma endregion
 
 #pragma region Run Debugging Simulation
-void run_debug_sim() noexcept
+void run_debug_sim(MachineDataPlotter& plotter) noexcept
 {
 
 }
