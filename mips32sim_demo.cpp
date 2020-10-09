@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <sstream>
 #include <stack>
+#include <stdexcept>
 
 struct ConsoleIODevice final : virtual public mips32::IODevice
 {
@@ -674,6 +675,8 @@ CommandParser::Command get_command(std::stack<std::string>& tokens) noexcept;
 
 std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_command() noexcept
 {
+    tokens.swap(std::stack<std::string>{});
+
     std::string cmdline{};
     std::getline(std::cin, cmdline);
 
@@ -703,26 +706,130 @@ std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_comm
     switch (command)
     {
     case Command::INVALID:
+        return { command, {} };
     case Command::HELP:
     case Command::RESET:
     case Command::EXIT:
+    case Command::SINGLE_STEP:
+    case Command::RUN:
+    {
+        if (!tokens.empty())
+            return{ Command::INVALID, {} };
+
         return { command, {} };
+    }
 
     case Command::SHOW:
-        return { command, {} };
-        break;
-    case Command::SINGLE_STEP:
-        return { command, {} };
-        break;
+    {
+        if (tokens.size() != 1)
+            return { Command::INVALID, {} };
+
+        auto tok = tokens.top();
+        if (tok == "state")
+        {
+            Data d{};
+            d.option = 0;
+            return { command, d };
+        }
+
+        static std::array<std::string, 32> regs
+        {
+            "r0", "r1", "r2", "r3", "r4",
+            "r5", "r6", "r7", "r8", "r9",
+            "r10", "r11", "r12", "r13", "r14",
+            "r15", "r16", "r17", "r18", "r19",
+            "r20", "r21", "r22", "r23", "r24",
+            "r25", "r26", "r27", "r28", "r29",
+            "r30", "r31"
+        };
+
+        auto r = std::find(regs.cbegin(), regs.cend(), tok);
+        if (r == regs.cend())
+            return { Command::INVALID,{} };
+
+        Data d{};
+        d.option = 1;
+        d._register = r - regs.cbegin();
+
+        return { command, d };
+    }
     case Command::SET:
-        return { command, {} };
-        break;
+    {
+        if (tokens.size() != 2)
+            return { Command::INVALID, {} };
+
+        static std::array<std::string, 32> regs
+        {
+            "r0", "r1", "r2", "r3", "r4",
+            "r5", "r6", "r7", "r8", "r9",
+            "r10", "r11", "r12", "r13", "r14",
+            "r15", "r16", "r17", "r18", "r19",
+            "r20", "r21", "r22", "r23", "r24",
+            "r25", "r26", "r27", "r28", "r29",
+            "r30", "r31"
+        };
+
+        auto tok_reg = tokens.top(); tokens.pop();
+        auto tok_val = tokens.top(); tokens.pop();
+
+        auto r = std::find(regs.cbegin(), regs.cend(), tok_reg);
+        if (r == regs.cend())
+            return { Command::INVALID,{} };
+
+        try
+        {
+            Data d{};
+            d.option = 0;
+            d._register = r - regs.cbegin();
+            d.value = std::stoul(tok_val);
+
+            return { command, d };
+        }
+        catch (std::exception const& e)
+        {
+            return { Command::INVALID, {} };
+        }
+    }
     case Command::BREAKPOINT:
-        return { command, {} };
-        break;
-    case Command::RUN:
-        return { command, {} };
-        break;
+    {
+        if (tokens.empty())
+            return { Command::INVALID, {} };
+
+        auto opt_tok = tokens.top(); tokens.pop();
+
+        if(opt_tok == "clear")
+        {
+            Data d{};
+            d.option = 0;
+            return { command, d };
+        }
+        else if (opt_tok == "list")
+        {
+            Data d{};
+            d.option = 1;
+            return { command, d };
+        }
+        else if (opt_tok == "pc")
+        {
+            if (tokens.empty())
+                return { Command::INVALID, {} };
+
+            try
+            {
+                auto tok_val = tokens.top(); tokens.pop();
+
+                Data d{};
+                d.option = 2;
+                d.value = std::stoul(tok_val);
+            }
+            catch (std::exception const& e)
+            {
+                return { Command::INVALID, {} };
+            }
+        }
+
+        return { Command::INVALID, {} };
+    }
     }
 
     return { Command::INVALID, {} };
@@ -804,7 +911,7 @@ void GDB::show(int what, std::uint32_t where) noexcept
 
     switch (what)
     {
-    case 0: // all
+    case 0: // state
         plotter.plot();
         break;
     case 1: // reg
