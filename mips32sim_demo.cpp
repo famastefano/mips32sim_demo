@@ -11,6 +11,7 @@
 #include <string>
 #include <memory>
 #include <cstdint>
+#include <iostream>
 
 struct ConsoleIODevice final : virtual public mips32::IODevice
 {
@@ -67,6 +68,7 @@ int main()
     auto filehandler = std::make_unique<CSTDIOFileHandler>();
 
     mips32::Machine machine{ 512_MB, iodevice.get(), filehandler.get() };
+    machine.reset();
 
     fmt::print("{:^50}\n", "MIPS32 Simulator - Demo");
     fmt::print("1) Program with I/O\n"
@@ -145,7 +147,8 @@ void CSTDIOFileHandler::close(std::uint32_t fd) noexcept
 #pragma region IO Device Implementation
 ConsoleIODevice::ConsoleIODevice() noexcept
 {
-    log = fopen("ConsoleIODevice.log", "w+");
+    log = fopen("ConsoleIODevice.log", "w");
+    fprintf(log, "%s\n", __FUNCSIG__);
 }
 
 ConsoleIODevice::~ConsoleIODevice()
@@ -155,44 +158,53 @@ ConsoleIODevice::~ConsoleIODevice()
 
 void ConsoleIODevice::print_integer(std::uint32_t value) noexcept
 {
-    fprintf(log, "%s : %08X\n", __FUNCSIG__, value);
-    printf("%lld", (std::int64_t)value);
+    fprintf(log, "%s : %d\n", __FUNCSIG__, value);
+    std::cout << value;
 }
 
 void ConsoleIODevice::print_float(float value) noexcept
 {
     fprintf(log, "%s : %.3f\n", __FUNCSIG__, value);
-    printf("%.3f", value);
+    std::cout << value;
 }
 
 void ConsoleIODevice::print_double(double value) noexcept
 {
     fprintf(log, "%s : %.3f\n", __FUNCSIG__, value);
-    printf("%.3f", value);
+    std::cout << value;
 }
 
 void ConsoleIODevice::print_string(char const* string) noexcept
 {
     fprintf(log, "%s : [%p] first-byte: '%u'\n", __FUNCSIG__, string, (unsigned char)string[0]);
-    printf("%s", string);
+    std::cout << string;
 }
 
 void ConsoleIODevice::read_integer(std::uint32_t * value) noexcept
 {
     fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
-    (void)scanf("%d", value);
+    std::uint32_t v{};
+    std::cin >> v;
+    fprintf(log, "%s : READ %d\n", __FUNCSIG__, v);
+    *value = v;
 }
 
 void ConsoleIODevice::read_float(float* value) noexcept
 {
     fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
-    (void)scanf("%f", value);
+    float v{};
+    std::cin >> v;
+    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v);
+    *value = v;
 }
 
 void ConsoleIODevice::read_double(double* value) noexcept
 {
     fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
-    (void)scanf("%lf", value);
+    double v{};
+    std::cin >> v;
+    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v);
+    *value = v;
 }
 
 void ConsoleIODevice::read_string(char* string, std::uint32_t max_count) noexcept
@@ -202,7 +214,12 @@ void ConsoleIODevice::read_string(char* string, std::uint32_t max_count) noexcep
     fmt += std::to_string(max_count);
     fmt += "c";
     fprintf(log, "%s : [%p] fmt: '%s'\n", __FUNCSIG__, string, fmt.c_str());
-    (void)scanf(fmt.c_str(), string);
+    std::string v{};
+    std::cin >> v;
+    fprintf(log, "%s : READ '%s' with size '%d'\n", __FUNCSIG__, v.c_str(), (int)v.size());
+    
+    for (std::uint32_t i = 0; i < std::min(max_count, std::uint32_t(v.size())); ++i)
+        string[i] = v[i];
 }
 #pragma endregion
 
@@ -294,6 +311,8 @@ void MachineDataPlotter::plot() noexcept
 #pragma region Run I/O Program
 void run_io_program(mips32::Machine& machine) noexcept
 {
+    machine.reset();
+
     fmt::print("{:^50}\n", "I/O Program Simulation");
     fmt::print("Loading executable...\n");
 
@@ -304,7 +323,7 @@ void run_io_program(mips32::Machine& machine) noexcept
     fmt::print("Executable loaded!\n");
     fmt::print("Running program...\n");
 
-    fmt::print("{:^50}\n", "Machine's state before running the I/O executable");
+    fmt::print("\n{:^50}\n", "Machine's state before running the I/O executable");
     plotter.plot();
     machine.start();
     fmt::print("{:^50}\n", "Machine's state after running the I/O executable");
@@ -336,11 +355,11 @@ void load_io_program(mips32::MachineInspector& inspector) noexcept
      *
      * .data 0x0000'0000
      * rx:  .asciiz "x = "     # data+0
-     * ry:  .asciiz "y = "     # data+4
-     * sum: .asciiz "x + y = " # data+8
-     * sub: .asciiz "\nx - y = " # data+17
-     * mul: .asciiz "\nx * y = " # data+27
-     * div: .asciiz "\nx / y = " # data+36
+     * ry:  .asciiz "y = "     # data+5
+     * sum: .asciiz "x + y = " # data+10
+     * sub: .asciiz "\nx - y = " # data+19
+     * mul: .asciiz "\nx * y = " # data+29
+     * div: .asciiz "\nx / y = " # data+39
      *
      * .text 0x8000'0000
      * # "x = "
@@ -428,7 +447,8 @@ void load_io_program(mips32::MachineInspector& inspector) noexcept
 
         // generic read int
         // "ADDIU"_cpu | 2_rd | 0_rs | 5,
-        // "ADD"_cpu  | <dest>_rd | 0_rs | 2_rt,
+        // "SYSCALL"_cpu,
+        // "ADDU"_cpu  | <dest>_rd | 0_rs | 2_rt,
 
         // x = 
         "ADDIU"_cpu | 4_rt | 0_rs | 0, // data+0
@@ -436,49 +456,51 @@ void load_io_program(mips32::MachineInspector& inspector) noexcept
         "SYSCALL"_cpu,
         // $s0 = x
         "ADDIU"_cpu | 2_rt | 0_rs | 5,
-        "ADD"_cpu | 16_rd | 0_rs | 2_rt,
+        "SYSCALL"_cpu,
+        "ADDU"_cpu | 16_rd | 0_rs | 2_rt,
 
         // y = 
-        "ADDIU"_cpu | 4_rt | 0_rs | 4, // data+4
+        "ADDIU"_cpu | 4_rt | 0_rs | 5, // data+5
         "ADDIU"_cpu | 2_rt | 0_rs | 4,
         "SYSCALL"_cpu,
         // $s0 = y
         "ADDIU"_cpu | 2_rt | 0_rs | 5,
-        "ADD"_cpu | 17_rd | 0_rs | 2_rt,
+        "SYSCALL"_cpu,
+        "ADDU"_cpu | 17_rd | 0_rs | 2_rt,
 
         // x + y = 
-        "ADDIU"_cpu | 4_rt | 0_rs | 8, // data+8
+        "ADDIU"_cpu | 4_rt | 0_rs | 10, // data+10
         "ADDIU"_cpu | 2_rt | 0_rs | 4,
         "SYSCALL"_cpu,
 
-        "ADD"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 + $s1
+        "ADDU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 + $s1
         "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
         "SYSCALL"_cpu,
 
         // x - y = 
-        "ADDIU"_cpu | 4_rt | 0_rs | 17, // data+17
+        "ADDIU"_cpu | 4_rt | 0_rs | 19, // data+19
         "ADDIU"_cpu | 2_rt | 0_rs | 4,
         "SYSCALL"_cpu,
 
-        "SUB"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 - $s1
+        "SUBU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 - $s1
         "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
         "SYSCALL"_cpu,
 
         // x * y = 
-        "ADDIU"_cpu | 4_rt | 0_rs | 27, // data+27
+        "ADDIU"_cpu | 4_rt | 0_rs | 29, // data+29
         "ADDIU"_cpu | 2_rt | 0_rs | 4,
         "SYSCALL"_cpu,
 
-        "MUL"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 * $s1
+        "MULU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 * $s1
         "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
         "SYSCALL"_cpu,
 
         // x / y = 
-        "ADDIU"_cpu | 4_rt | 0_rs | 36, // data+36
+        "ADDIU"_cpu | 4_rt | 0_rs | 39, // data+39
         "ADDIU"_cpu | 2_rt | 0_rs | 4,
         "SYSCALL"_cpu,
 
-        "DIV"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 / $s1
+        "DIVU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 / $s1
         "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
         "SYSCALL"_cpu,
 
@@ -506,7 +528,7 @@ void load_io_program(mips32::MachineInspector& inspector) noexcept
     constexpr std::uint32_t _data_str_len = 50;
 
     inspector.RAM_write(data_segment, _data_str, _data_str_len);
-    inspector.RAM_write(text_segment, machine_code, std::size(machine_code));
+    inspector.RAM_write(text_segment, machine_code, std::size(machine_code)*sizeof(std::uint32_t));
     inspector.CPU_pc() = text_segment;
 }
 #pragma endregion
