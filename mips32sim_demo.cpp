@@ -159,7 +159,7 @@ ConsoleIODevice::~ConsoleIODevice()
 void ConsoleIODevice::print_integer(std::uint32_t value) noexcept
 {
     fprintf(log, "%s : %d\n", __FUNCSIG__, value);
-    std::cout << value;
+    std::cout << (std::int32_t)value;
 }
 
 void ConsoleIODevice::print_float(float value) noexcept
@@ -183,10 +183,10 @@ void ConsoleIODevice::print_string(char const* string) noexcept
 void ConsoleIODevice::read_integer(std::uint32_t * value) noexcept
 {
     fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
-    std::uint32_t v{};
+    std::int32_t v{};
     std::cin >> v;
     fprintf(log, "%s : READ %d\n", __FUNCSIG__, v);
-    *value = v;
+    *value = (std::uint32_t)v;
 }
 
 void ConsoleIODevice::read_float(float* value) noexcept
@@ -271,7 +271,7 @@ void MachineDataPlotter::plot() noexcept
         auto cur_ec = inspector.CPU_read_exit_code();
         
         fmt::print(" PC{} {:>#10X}{:14}| ", cur_pc != prev_pc ? '<' : ' ', cur_pc, "");
-        fmt::print("Exit Code {:>18}\n", exit_code[1]);
+        fmt::print("Exit Code {:>18}\n", exit_code[cur_ec]);
     }
     
     // Prints registers
@@ -313,7 +313,8 @@ void run_io_program(mips32::Machine& machine) noexcept
 {
     machine.reset();
 
-    fmt::print("{:^50}\n", "I/O Program Simulation");
+    fmt::print("\tI/O Program Simulation\n");
+    fmt::print("A simple program that asks for 2 integers and shows simple arithmetic operations.\n");
     fmt::print("Loading executable...\n");
 
     auto inspector = machine.get_inspector();
@@ -321,12 +322,13 @@ void run_io_program(mips32::Machine& machine) noexcept
     load_io_program(inspector);
 
     fmt::print("Executable loaded!\n");
-    fmt::print("Running program...\n");
+    fmt::print("Running program...\n\n");
 
-    fmt::print("\n{:^50}\n", "Machine's state before running the I/O executable");
+    fmt::print("\tMachine's state before running the I/O executable\n");
     plotter.plot();
+    fmt::print("\n");
     machine.start();
-    fmt::print("{:^50}\n", "Machine's state after running the I/O executable");
+    fmt::print("\n\n\tMachine's state after running the I/O executable\n");
     plotter.plot();
 }
 
