@@ -93,6 +93,7 @@ struct GDB
     mips32::Machine& machine;
     MachineDataPlotter plotter;
     std::vector<std::uint32_t> breakpoints;
+    std::uint32_t last_bp_hit{};
 
     GDB(mips32::Machine& machine) noexcept;
     ~GDB();
@@ -608,6 +609,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
     using Command = CommandParser::Command;
 
     auto inspector = machine.get_inspector();
+    load_debug_program(inspector);
 
     GDB gdb{ machine };
     CommandParser cmd_parser{};
@@ -653,7 +655,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
         }
 
         {
-            fmt::print("gdb> ");
+            fmt::print("\ngdb> ");
             auto [_command, _data] = cmd_parser.parse_command();
             command = _command;
             data = _data;
@@ -666,7 +668,186 @@ void run_debug_sim(mips32::Machine& machine) noexcept
 
 void load_debug_program(mips32::MachineInspector inspector) noexcept
 {
-    load_io_program(inspector);
+    constexpr std::uint32_t data_segment = 0x0000'0000;
+    constexpr std::uint32_t text_segment = 0x8000'0000;
+
+    /**
+     * Reads 2 integers and prints x+y, x-y, x*y, x/y
+     *
+     * -- C-like pseudocode --
+     * int x, y;
+     * scanf("%d %d", &x, &y);
+     * printf("x+y = %d\n"
+     *        "x-y = %d\n"
+     *        "x*y = %d\n"
+     *        "x/y = %d\n"
+     *        , x+y
+     *        , x-y
+     *        , x*y
+     *        , x/y);
+     * return 0;
+     *
+     * -- Pseudo-Assembly --
+     *
+     * .data 0x0000'0000
+     * rx:  .asciiz "x = "     # data+0
+     * ry:  .asciiz "y = "     # data+5
+     * sum: .asciiz "x + y = " # data+10
+     * sub: .asciiz "\nx - y = " # data+19
+     * mul: .asciiz "\nx * y = " # data+29
+     * div: .asciiz "\nx / y = " # data+39
+     *
+     * .text 0x8000'0000
+     * # "x = "
+     * addi $a0, $zero, high(rx)  # la $r1, rx
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(rx)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # reads x
+     * addi $v0, $zero, 5         # read_integer
+     * add  $s0, $zero, $v0
+     *
+     * # "y = "
+     * addi $a0, $zero, high(ry)  # la $a0, ry
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(ry)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # reads y
+     * addi $v0, $zero, 5         # read_integer
+     * add  $s1, $zero, $v0
+     *
+     * # "x + y = "
+     * addi $a0, $zero, high(sum)  # la $a0, sum
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(sum)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # prints x+y
+     * add  $a0, $s0, $s1
+     * addi $v0, $zero, 1
+     * syscall
+     *
+     * # "x - y = "
+     * addi $a0, $zero, high(sub)  # la $a0, sub
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(sub)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # prints x-y
+     * sub  $a0, $s0, $s1
+     * addi $v0, $zero, 1
+     * syscall
+     *
+     * # "x * y = "
+     * addi $a0, $zero, high(mul)  # la $a0, mul
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(mul)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # prints x*y
+     * mul  $a0, $s0, $s1
+     * addi $v0, $zero, 1
+     * syscall
+     *
+     * # "x / y = "
+     * addi $a0, $zero, high(div)  # la $a0, div
+     * sll  $a0, $a0, 16
+     * ori  $a0, $a0, low(div)
+     * addi $v0, $zero, 4         # print_string
+     * syscall
+     *
+     * # prints x/y
+     * div  $a0, $s0, $s1
+     * addi $v0, $zero, 1
+     * syscall
+     */
+    constexpr std::uint32_t machine_code[] =
+    {
+        // $zero = 0
+        // $v0 = 2
+        // $a0 = 4
+        // $s0 = 16
+        // $s1 = 17
+
+        // generic print string
+        // "ADDIU"_cpu | 4_rd | 0_rs | <addr>,
+        // "ADDIU"_cpu | 2_rd | 0_rs | 4,
+        // "SYSCALL"_cpu,
+
+        // generic read int
+        // "ADDIU"_cpu | 2_rd | 0_rs | 5,
+        // "SYSCALL"_cpu,
+        // "ADDU"_cpu  | <dest>_rd | 0_rs | 2_rt,
+
+        // x + y = 
+        "ADDIU"_cpu | 4_rt | 0_rs | 10, // data+10
+        "ADDIU"_cpu | 2_rt | 0_rs | 4,
+        "SYSCALL"_cpu,
+
+        "ADDU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 + $s1
+        "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
+        "SYSCALL"_cpu,
+
+        // x - y = 
+        "ADDIU"_cpu | 4_rt | 0_rs | 19, // data+19
+        "ADDIU"_cpu | 2_rt | 0_rs | 4,
+        "SYSCALL"_cpu,
+
+        "SUBU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 - $s1
+        "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
+        "SYSCALL"_cpu,
+
+        // x * y = 
+        "ADDIU"_cpu | 4_rt | 0_rs | 29, // data+29
+        "ADDIU"_cpu | 2_rt | 0_rs | 4,
+        "SYSCALL"_cpu,
+
+        "MULU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 * $s1
+        "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
+        "SYSCALL"_cpu,
+
+        // x / y = 
+        "ADDIU"_cpu | 4_rt | 0_rs | 39, // data+39
+        "ADDIU"_cpu | 2_rt | 0_rs | 4,
+        "SYSCALL"_cpu,
+
+        "DIVU"_cpu | 4_rd | 16_rs | 17_rt, // $a0 = $s0 / $s1
+        "ADDIU"_cpu | 2_rt | 0_rs | 1,     // print integer
+        "SYSCALL"_cpu,
+
+        "ADDIU"_cpu | 2_rt | 0_rs | 10,   // exit
+        "SYSCALL"_cpu,
+    };
+
+    /*
+     * .data 0x0000'0000
+     * rx:.asciiz "x = "        # data + 0
+     * ry:.asciiz "y = "        # data + 4
+     * sum:.asciiz "x + y = "   # data + 8
+     * sub:.asciiz "\nx - y = " # data + 17
+     * mul:.asciiz "\nx * y = " # data + 27
+     * div:.asciiz "\nx / y = " # data + 36
+     */
+
+    char const* _data_str =
+        "x = \0"
+        "y = \0"
+        "x + y = \0"
+        "\nx - y = \0"
+        "\nx * y = \0"
+        "\nx / y = \0";
+    constexpr std::uint32_t _data_str_len = 50;
+
+    inspector.RAM_write(data_segment, _data_str, _data_str_len);
+    inspector.RAM_write(text_segment, machine_code, std::size(machine_code) * sizeof(std::uint32_t));
+    inspector.CPU_pc() = text_segment;
 }
 #pragma endregion
 
@@ -781,7 +962,7 @@ std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_comm
             Data d{};
             d.option = 0;
             d._register = r - regs.cbegin();
-            d.value = std::stoul(tok_val);
+            d.value = std::stoul(tok_val, nullptr, 0);
 
             return { command, d };
         }
@@ -820,7 +1001,7 @@ std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_comm
 
                 Data d{};
                 d.option = 2;
-                d.value = std::stoul(tok_val);
+                d.value = std::stoul(tok_val, nullptr, 0);
 
                 return { command, d };
             }
@@ -929,7 +1110,10 @@ void GDB::single_step() noexcept
 {
     fprintf(log, __FUNCSIG__ "\n"); fflush(log);
 
-    machine.single_step();
+    if (machine.single_step() != 0)
+    {
+        fmt::print("\nProgram terminated!\n");
+    }
 }
 
 void GDB::set(int what, std::uint32_t where, std::uint32_t value) noexcept
@@ -966,13 +1150,16 @@ void GDB::breakpoint(int what, std::uint32_t value) noexcept
         {
             fmt::print("Breakpoint(s) will trigger at the following PC values:\n");
             for (auto bp : breakpoints)
-                fmt::print("{:10X}\n", bp);
+                fmt::print("{:>#10X}\n", bp);
         }
 
         break;
     }
     case 2: // pc
-        breakpoints.emplace_back(value);
+    {
+        if(std::find(breakpoints.cbegin(), breakpoints.cend(), value) == breakpoints.cend())
+            breakpoints.emplace_back(value);
+    }
         break;
     default:
         break;
@@ -988,19 +1175,34 @@ void GDB::reset() noexcept
 void GDB::run() noexcept
 {
     fprintf(log, __FUNCSIG__ "\n"); fflush(log);
-    if (!breakpoints.size())
+    if (breakpoints.empty())
     {
         machine.start();
+        fmt::print("\n\tProgram terminated!\n");
     }
     else
     {
         auto bp = [this]() -> bool
         {
-            return std::find(breakpoints.cbegin(), breakpoints.cend(), machine.get_inspector().CPU_pc()) != breakpoints.cend();
+            auto b = std::find(breakpoints.cbegin(), breakpoints.cend(), machine.get_inspector().CPU_pc());
+            if (b == breakpoints.cend())
+                return false;
+
+            if (*b == last_bp_hit) // prevents deadlock
+                return false;
+
+            last_bp_hit = *b;
+            return true;
         };
 
         while (!bp())
-            machine.single_step();
+        {
+            if (machine.single_step() != 0)
+            {
+                fmt::print("\nProgram terminated!\n");
+                return;
+            }
+        }
 
         fmt::print("\nBreakpoint hit at [{:X}]\n", machine.get_inspector().CPU_pc());
     }
