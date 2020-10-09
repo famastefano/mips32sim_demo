@@ -5,7 +5,7 @@
 
 constexpr std::uint32_t operator""_cpu( char const *s, std::size_t n ) noexcept
 {
-  using namespace std::literals;
+  using namespace std::string_view_literals;
 
   struct Info
   {
