@@ -821,6 +821,8 @@ std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_comm
                 Data d{};
                 d.option = 2;
                 d.value = std::stoul(tok_val);
+
+                return { command, d };
             }
             catch (std::exception const& e)
             {
