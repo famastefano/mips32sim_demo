@@ -57,6 +57,7 @@ struct MachineDataPlotter
     ~MachineDataPlotter();
 
     void plot() noexcept;
+    void plot_reg(std::uint32_t reg) noexcept;
 };
 
 struct CommandParser
@@ -96,7 +97,7 @@ struct GDB
     ~GDB();
 
     void help() noexcept;
-    void show(int what) noexcept;
+    void show(int what, std::uint32_t where) noexcept;
     void single_step() noexcept;
     void set(int what, std::uint32_t where, std::uint32_t value) noexcept;
     void breakpoint(int what, std::uint32_t value) noexcept;
@@ -199,7 +200,7 @@ void CSTDIOFileHandler::close(std::uint32_t fd) noexcept
 ConsoleIODevice::ConsoleIODevice() noexcept
 {
     log = fopen("ConsoleIODevice.log", "w");
-    fprintf(log, "%s\n", __FUNCSIG__);
+    fprintf(log, "%s\n", __FUNCSIG__); fflush(log);
 }
 
 ConsoleIODevice::~ConsoleIODevice()
@@ -209,52 +210,52 @@ ConsoleIODevice::~ConsoleIODevice()
 
 void ConsoleIODevice::print_integer(std::uint32_t value) noexcept
 {
-    fprintf(log, "%s : %d\n", __FUNCSIG__, value);
+    fprintf(log, "%s : %d\n", __FUNCSIG__, value); fflush(log);
     std::cout << (std::int32_t)value;
 }
 
 void ConsoleIODevice::print_float(float value) noexcept
 {
-    fprintf(log, "%s : %.3f\n", __FUNCSIG__, value);
+    fprintf(log, "%s : %.3f\n", __FUNCSIG__, value); fflush(log);
     std::cout << value;
 }
 
 void ConsoleIODevice::print_double(double value) noexcept
 {
-    fprintf(log, "%s : %.3f\n", __FUNCSIG__, value);
+    fprintf(log, "%s : %.3f\n", __FUNCSIG__, value); fflush(log);
     std::cout << value;
 }
 
 void ConsoleIODevice::print_string(char const* string) noexcept
 {
-    fprintf(log, "%s : [%p] first-byte: '%u'\n", __FUNCSIG__, string, (unsigned char)string[0]);
+    fprintf(log, "%s : [%p] first-byte: '%u'\n", __FUNCSIG__, string, (unsigned char)string[0]); fflush(log);
     std::cout << string;
 }
 
-void ConsoleIODevice::read_integer(std::uint32_t * value) noexcept
+void ConsoleIODevice::read_integer(std::uint32_t* value) noexcept
 {
-    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
+    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value); fflush(log);
     std::int32_t v{};
     std::cin >> v;
-    fprintf(log, "%s : READ %d\n", __FUNCSIG__, v);
+    fprintf(log, "%s : READ %d\n", __FUNCSIG__, v); fflush(log);
     *value = (std::uint32_t)v;
 }
 
 void ConsoleIODevice::read_float(float* value) noexcept
 {
-    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
+    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value); fflush(log);
     float v{};
     std::cin >> v;
-    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v);
+    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v); fflush(log);
     *value = v;
 }
 
 void ConsoleIODevice::read_double(double* value) noexcept
 {
-    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value);
+    fprintf(log, "%s : [%p]\n", __FUNCSIG__, value); fflush(log);
     double v{};
     std::cin >> v;
-    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v);
+    fprintf(log, "%s : READ %f\n", __FUNCSIG__, v); fflush(log);
     *value = v;
 }
 
@@ -356,6 +357,20 @@ void MachineDataPlotter::plot() noexcept
         while (rb != re)
             prev_gprs[i++] = *rb++;
     }
+}
+void MachineDataPlotter::plot_reg(std::uint32_t reg) noexcept
+{
+    static char const* regs[] = {
+        "r0", "r1", "r2", "r3", "r4",
+        "r5", "r6", "r7", "r8", "r9",
+        "r10", "r11", "r12", "r13", "r14",
+        "r15", "r16", "r17", "r18", "r19",
+        "r20", "r21", "r22", "r23", "r24",
+        "r25", "r26", "r27", "r28", "r29",
+        "r30", "r31"
+    };
+    auto _reg = *(inspector.CPU_gpr_begin() + reg);
+    fmt::print("{:>3} {:>#10X} {:>12}\n", regs[reg], _reg, (std::int32_t)_reg);
 }
 #pragma endregion
 
@@ -599,6 +614,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
     fmt::print("\tGDB-like Simulation\n");
     gdb.help();
 
+    fmt::print("gdb> ");
     auto [command, data] = cmd_parser.parse_command();
     while(command != Command::EXIT || inspector.CPU_read_exit_code() != 0)
     {
@@ -610,7 +626,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
             break;
 
         case Command::SHOW:
-            gdb.show(data.option);
+            gdb.show(data.option, data._register);
             break;
 
         case Command::SINGLE_STEP:
@@ -636,6 +652,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
         }
 
         {
+            fmt::print("gdb> ");
             auto [_command, _data] = cmd_parser.parse_command();
             command = _command;
             data = _data;
@@ -643,7 +660,7 @@ void run_debug_sim(mips32::Machine& machine) noexcept
     }
 
     fmt::print("\tMachine's state\n");
-    gdb.show(0);
+    gdb.show(0, 0);
 }
 
 void load_debug_program(mips32::MachineInspector inspector) noexcept
@@ -659,6 +676,9 @@ std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_comm
 {
     std::string cmdline{};
     std::getline(std::cin, cmdline);
+
+    if (cmdline.empty())
+        return { Command::INVALID, {} };
 
     std::istringstream iss{ std::move(cmdline) };
 
@@ -751,7 +771,7 @@ CommandParser::Command get_command(std::stack<std::string>& tokens) noexcept
 GDB::GDB(mips32::Machine& machine) noexcept : machine(machine), plotter(machine.get_inspector())
 {
     log = fopen("GDB.log", "w");
-    fprintf(log, __FUNCSIG__"\n");
+    fprintf(log, __FUNCSIG__"\n"); fflush(log);
 }
 
 GDB::~GDB()
@@ -761,36 +781,119 @@ GDB::~GDB()
 
 void GDB::help() noexcept
 {
-    fprintf(log, __FUNCSIG__ "\n");
+    fprintf(log, __FUNCSIG__ "\n"); fflush(log);
+
+    fmt::print("\nUsage: gdb> help|show|bp|set|si|run|reset|exit\n"
+               "help\n\tPrints this message.\n"
+               "show state\n\tShows the CPU's state.\n"
+               "show <reg>\n\tShows the content of the specified register.\n"
+               "bp list\n\tLists all the breakpoints.\n"
+               "bp clear\n\tDeletes all the breakpoints.\n"
+               "bp pc <addr>\n\tPause the execution when the PC equals to <addr>.\n"
+               "set <reg> <value>\n\tSets the content of the specified register <reg> to <value>.\n"
+               "si\n\tExecute 1 instruction.\n"
+               "run\n\tRuns the program until a breakpoint is hit or it terminates.\n"
+               "reset\n\tResets the Machine.\n"
+               "exit\n\tTerminates GDB.\n"
+    );
 }
 
-void GDB::show(int what) noexcept
+void GDB::show(int what, std::uint32_t where) noexcept
 {
-    fprintf(log, __FUNCSIG__ " what: %d\n", what);
+    fprintf(log, __FUNCSIG__ " what: %d, where: %lu\n", what, where); fflush(log);
+
+    switch (what)
+    {
+    case 0: // all
+        plotter.plot();
+        break;
+    case 1: // reg
+        plotter.plot_reg(where);
+        break;
+    default:
+        help();
+        break;
+    }
 }
 
 void GDB::single_step() noexcept
 {
-    fprintf(log, __FUNCSIG__ "\n");
+    fprintf(log, __FUNCSIG__ "\n"); fflush(log);
+
+    machine.single_step();
 }
 
 void GDB::set(int what, std::uint32_t where, std::uint32_t value) noexcept
 {
-    fprintf(log, __FUNCSIG__ " what: %d, where: %lu, value: %lu\n", what, where, value);
+    fprintf(log, __FUNCSIG__ " what: %d, where: %lu, value: %lu\n", what, where, value); fflush(log);
+
+    switch (what)
+    {
+    case 0: // reg
+        *(machine.get_inspector().CPU_gpr_begin() + where) = value;
+        break;
+    default:
+        help();
+        break;
+    }
 }
 
 void GDB::breakpoint(int what, std::uint32_t value) noexcept
 {
-    fprintf(log, __FUNCSIG__ " what: %d, value: %lu\n", what, value);
+    fprintf(log, __FUNCSIG__ " what: %d, value: %lu\n", what, value); fflush(log);
+
+    switch (what)
+    {
+    case 0: // clear
+        breakpoints.clear();
+        break;
+    case 1: // list
+    {
+        if (!breakpoints.size())
+        {
+            fmt::print("No breakpoint set\n");
+        }
+        else
+        {
+            fmt::print("Breakpoint(s) will trigger at the following PC values:\n");
+            for (auto bp : breakpoints)
+                fmt::print("{:10X}\n", bp);
+        }
+
+        break;
+    }
+    case 2: // pc
+        breakpoints.emplace_back(value);
+        break;
+    default:
+        break;
+    }
 }
 
 void GDB::reset() noexcept
 {
-    fprintf(log, __FUNCSIG__ "\n");
+    fprintf(log, __FUNCSIG__ "\n"); fflush(log);
+    machine.reset();
 }
 
 void GDB::run() noexcept
 {
-    fprintf(log, __FUNCSIG__ "\n");
+    fprintf(log, __FUNCSIG__ "\n"); fflush(log);
+    if (!breakpoints.size())
+    {
+        machine.start();
+    }
+    else
+    {
+        auto bp = [this]() -> bool
+        {
+            return std::find(breakpoints.cbegin(), breakpoints.cend(), machine.get_inspector().CPU_pc()) != breakpoints.cend();
+        };
+
+        while (!bp())
+            machine.single_step();
+
+        fmt::print("\nBreakpoint hit at [{:X}]\n", machine.get_inspector().CPU_pc());
+    }
 }
 #pragma endregion
