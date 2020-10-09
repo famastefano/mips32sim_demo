@@ -12,6 +12,11 @@
 #include <memory>
 #include <cstdint>
 #include <iostream>
+#include <string_view>
+#include <utility>
+#include <algorithm>
+#include <sstream>
+#include <stack>
 
 struct ConsoleIODevice final : virtual public mips32::IODevice
 {
@@ -44,21 +49,66 @@ struct CSTDIOFileHandler final : virtual public mips32::FileHandler
 
 struct MachineDataPlotter
 {
-    mips32::MachineInspector& inspector;
+    mips32::MachineInspector inspector;
     std::array<std::uint32_t, 32> prev_gprs = {};
     std::uint32_t prev_pc, prev_exitcode;
 
-    MachineDataPlotter(mips32::MachineInspector& inspector) noexcept;
+    MachineDataPlotter(mips32::MachineInspector inspector) noexcept;
     ~MachineDataPlotter();
 
     void plot() noexcept;
 };
 
+struct CommandParser
+{
+    enum class Command
+    {
+        INVALID,
+        HELP,
+        SHOW,
+        SINGLE_STEP,
+        SET,
+        BREAKPOINT,
+        RESET,
+        EXIT,
+        RUN,
+    };
+
+    struct Data
+    {
+        int option;
+        std::uint32_t _register, value;
+    };
+
+    std::pair<Command, Data> parse_command() noexcept;
+
+    std::stack<std::string> tokens{};
+};
+
+struct GDB
+{
+    FILE* log;
+    mips32::Machine& machine;
+    MachineDataPlotter plotter;
+    std::vector<std::uint32_t> breakpoints;
+
+    GDB(mips32::Machine& machine) noexcept;
+    ~GDB();
+
+    void help() noexcept;
+    void show(int what) noexcept;
+    void single_step() noexcept;
+    void set(int what, std::uint32_t where, std::uint32_t value) noexcept;
+    void breakpoint(int what, std::uint32_t value) noexcept;
+    void reset() noexcept;
+    void run() noexcept;
+};
+
 void run_io_program(mips32::Machine& machine) noexcept;
 void run_debug_sim(mips32::Machine& machine) noexcept;
 
-void load_io_program(mips32::MachineInspector& inspector) noexcept;
-void load_debug_program(mips32::MachineInspector& inspector) noexcept;
+void load_io_program(mips32::MachineInspector inspector) noexcept;
+void load_debug_program(mips32::MachineInspector inspector) noexcept;
 
 int main()
 {
@@ -75,9 +125,10 @@ int main()
                "2) Debugging simulation\n"
                "Choice: ");
 
-    char choice{};
-    (void)scanf("%c", &choice);
-    switch (choice)
+    std::string choice{'\0'};
+    std::getline(std::cin, choice);
+
+    switch (choice[0])
     {
     case '1':
         run_io_program(machine);
@@ -224,7 +275,7 @@ void ConsoleIODevice::read_string(char* string, std::uint32_t max_count) noexcep
 #pragma endregion
 
 #pragma region Machine Data Plotter Implementation
-MachineDataPlotter::MachineDataPlotter(mips32::MachineInspector& inspector) noexcept : inspector(inspector)
+MachineDataPlotter::MachineDataPlotter(mips32::MachineInspector inspector) noexcept : inspector(inspector)
 {
     prev_pc = inspector.CPU_pc();
     prev_exitcode = inspector.CPU_read_exit_code();
@@ -332,7 +383,7 @@ void run_io_program(mips32::Machine& machine) noexcept
     plotter.plot();
 }
 
-void load_io_program(mips32::MachineInspector& inspector) noexcept
+void load_io_program(mips32::MachineInspector inspector) noexcept
 {
     constexpr std::uint32_t data_segment = 0x0000'0000;
     constexpr std::uint32_t text_segment = 0x8000'0000;
@@ -538,9 +589,208 @@ void load_io_program(mips32::MachineInspector& inspector) noexcept
 #pragma region Run Debugging Simulation
 void run_debug_sim(mips32::Machine& machine) noexcept
 {
-    
+    using Command = CommandParser::Command;
+
+    auto inspector = machine.get_inspector();
+
+    GDB gdb{ machine };
+    CommandParser cmd_parser{};
+
+    fmt::print("\tGDB-like Simulation\n");
+    gdb.help();
+
+    auto [command, data] = cmd_parser.parse_command();
+    while(command != Command::EXIT || inspector.CPU_read_exit_code() != 0)
+    {
+        switch (command)
+        {
+        case Command::INVALID:
+        case Command::HELP:
+            gdb.help();
+            break;
+
+        case Command::SHOW:
+            gdb.show(data.option);
+            break;
+
+        case Command::SINGLE_STEP:
+            gdb.single_step();
+            break;
+
+        case Command::SET:
+            gdb.set(data.option, data._register, data.value);
+            break;
+
+        case Command::BREAKPOINT:
+            gdb.breakpoint(data.option, data.value);
+            break;
+
+        case Command::RESET:
+            gdb.reset();
+            load_debug_program(machine.get_inspector());
+            break;
+
+        case Command::RUN:
+            gdb.run();
+            break;
+        }
+
+        {
+            auto [_command, _data] = cmd_parser.parse_command();
+            command = _command;
+            data = _data;
+        }
+    }
+
+    fmt::print("\tMachine's state\n");
+    gdb.show(0);
 }
 
-void load_debug_program(mips32::MachineInspector& inspector) noexcept
-{}
+void load_debug_program(mips32::MachineInspector inspector) noexcept
+{
+    load_io_program(inspector);
+}
+#pragma endregion
+
+#pragma region Command Parser Implementation
+CommandParser::Command get_command(std::stack<std::string>& tokens) noexcept;
+
+std::pair<CommandParser::Command, CommandParser::Data> CommandParser::parse_command() noexcept
+{
+    std::string cmdline{};
+    std::getline(std::cin, cmdline);
+
+    std::istringstream iss{ std::move(cmdline) };
+
+    auto tolower_str = [](std::string& str) { for (auto& c : str) c = (char)tolower((int)c); };
+
+    {
+        std::vector<std::string> toks;
+        std::string token{};
+        while (iss >> token)
+        {
+            tolower_str(token);
+            toks.emplace_back(std::move(token));
+        }
+        auto begin = toks.rbegin();
+        auto end = toks.rend();
+        while (begin != end)
+            tokens.push(std::move(*begin++));
+    }
+
+    auto command = get_command(tokens);
+
+    switch (command)
+    {
+    case Command::INVALID:
+    case Command::HELP:
+    case Command::RESET:
+    case Command::EXIT:
+        return { command, {} };
+
+    case Command::SHOW:
+        return { command, {} };
+        break;
+    case Command::SINGLE_STEP:
+        return { command, {} };
+        break;
+    case Command::SET:
+        return { command, {} };
+        break;
+    case Command::BREAKPOINT:
+        return { command, {} };
+        break;
+    case Command::RUN:
+        return { command, {} };
+        break;
+    }
+
+    return { Command::INVALID, {} };
+}
+
+CommandParser::Command get_command(std::stack<std::string>& tokens) noexcept
+{
+    using Command = CommandParser::Command;
+
+    #define HASHED_STR(x) std::hash<std::string_view>{}(x)
+    static std::array<std::size_t, 8> command_hash
+    {
+        HASHED_STR("help"),
+        HASHED_STR("show"),
+        HASHED_STR("si"),
+        HASHED_STR("set"),
+        HASHED_STR("bp"),
+        HASHED_STR("reset"),
+        HASHED_STR("exit"),
+        HASHED_STR("run"),
+    };
+    #undef HASHED_STR
+
+    static std::array<Command, 8> command_type
+    {
+        Command::HELP,
+        Command::SHOW,
+        Command::SINGLE_STEP,
+        Command::SET,
+        Command::BREAKPOINT,
+        Command::RESET,
+        Command::EXIT,
+        Command::RUN,
+    };
+
+    auto c = std::find(command_hash.cbegin(), command_hash.cend(), std::hash<std::string>{}(tokens.top()));
+    if (c == command_hash.cend())
+        return Command::INVALID;
+
+    tokens.pop();
+    return command_type[c - command_hash.cbegin()];
+}
+#pragma endregion
+
+#pragma region GDB Implementation
+GDB::GDB(mips32::Machine& machine) noexcept : machine(machine), plotter(machine.get_inspector())
+{
+    log = fopen("GDB.log", "w");
+    fprintf(log, __FUNCSIG__"\n");
+}
+
+GDB::~GDB()
+{
+    fclose(log);
+}
+
+void GDB::help() noexcept
+{
+    fprintf(log, __FUNCSIG__ "\n");
+}
+
+void GDB::show(int what) noexcept
+{
+    fprintf(log, __FUNCSIG__ " what: %d\n", what);
+}
+
+void GDB::single_step() noexcept
+{
+    fprintf(log, __FUNCSIG__ "\n");
+}
+
+void GDB::set(int what, std::uint32_t where, std::uint32_t value) noexcept
+{
+    fprintf(log, __FUNCSIG__ " what: %d, where: %lu, value: %lu\n", what, where, value);
+}
+
+void GDB::breakpoint(int what, std::uint32_t value) noexcept
+{
+    fprintf(log, __FUNCSIG__ " what: %d, value: %lu\n", what, value);
+}
+
+void GDB::reset() noexcept
+{
+    fprintf(log, __FUNCSIG__ "\n");
+}
+
+void GDB::run() noexcept
+{
+    fprintf(log, __FUNCSIG__ "\n");
+}
 #pragma endregion
